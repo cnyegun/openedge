@@ -109,7 +109,12 @@ def convert_model(ctx: Context) -> Context:
     output_path = ctx.output_dir / f"model_{fmt}.tflite"
 
     if fmt == "pytorch":
-        from ultralytics import YOLO
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            raise RuntimeError(
+                "Ultralytics required for PyTorch conversion. Install with: pip install ultralytics"
+            )
 
         result = YOLO(str(ctx.model_path)).export(
             format="tflite", imgsz=640, verbose=False
@@ -144,7 +149,12 @@ def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
             except:
                 continue
 
-    import tensorflow as tf
+    try:
+        import tensorflow as tf
+    except ImportError:
+        raise RuntimeError(
+            "TensorFlow required for quantization. Install with: pip install tensorflow"
+        )
 
     # Configure quantization
     converter = tf.lite.TFLiteConverter.from_flat_file(str(ctx.tflite_path))
@@ -276,7 +286,12 @@ def validate_model(model_path: Path, dataset_path: Path, verbose: bool = False):
     if not images:
         raise ValueError(f"No images found in {dataset_path}")
 
-    import tensorflow as tf
+    try:
+        import tensorflow as tf
+    except ImportError:
+        raise RuntimeError(
+            "TensorFlow required for validation. Install with: pip install tensorflow"
+        )
 
     interpreter = tf.lite.Interpreter(model_path=str(model_path))
     interpreter.allocate_tensors()
