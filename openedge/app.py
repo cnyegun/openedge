@@ -9,14 +9,19 @@ import shutil
 import json
 import time
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Optional
 import numpy as np
 
 app = typer.Typer(help="OpenEdge - Deploy ML models to embedded devices")
 
+TARGETS = {
+    "esp32": "esp32-s3-devkitc-1",
+    "stm32": "stm32f407vg",
+    "arduino": "arduino nano 33",
+}
 
-# === Context: Stores pipeline state ===
+
 @dataclass
 class Context:
     model_path: Optional[Path] = None
@@ -28,28 +33,18 @@ class Context:
     tensor_arena: Optional[int] = None
 
     def save(self, path: Path = None):
-        """Save context to JSON file."""
-        save_path = path or self.output_dir / "context.json"
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        data = {k: str(v) if isinstance(v, Path) else v for k, v in vars(self).items()}
-        save_path.write_text(json.dumps(data, indent=2))
+        path = path or self.output_dir / "context.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            k: str(v) if isinstance(v, Path) else v for k, v in asdict(self).items()
+        }
+        path.write_text(json.dumps(data, indent=2))
 
     @classmethod
     def load(cls, path: Path) -> "Context":
-        """Load context from JSON file."""
         data = json.loads(path.read_text())
         return cls(
-            model_path=Path(data.get("model_path")) if data.get("model_path") else None,
-            target=data.get("target", "esp32"),
-            output_dir=Path(data.get("output_dir", "output")),
-            tflite_path=Path(data["tflite_path"]) if data.get("tflite_path") else None,
-            quantized_path=Path(data["quantized_path"])
-            if data.get("quantized_path")
-            else None,
-            optimized_path=Path(data["optimized_path"])
-            if data.get("optimized_path")
-            else None,
-            tensor_arena=data.get("tensor_arena"),
+            **{k: Path(v) if v and k.endswith("_path") else v for k, v in data.items()}
         )
 
 
@@ -88,40 +83,25 @@ def check_file(path: Path, name: str = "file"):
 
 # === Core Pipeline Functions ===
 def convert_model(ctx: Context) -> Context:
-    """Convert PyTorch/ONNX/Keras model to TFLite format."""
+    """Convert PyTorch model to TFLite format."""
     if not ctx.model_path:
         raise ValueError("model_path required")
 
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Detect format from file extension
-    fmt_map = {
-        ".pt": "pytorch",
-        ".pth": "pytorch",
-        ".onnx": "onnx",
-        ".h5": "keras",
-        ".keras": "keras",
-    }
-    fmt = fmt_map.get(ctx.model_path.suffix.lower())
-    if not fmt:
-        raise ValueError(f"Unsupported format: {ctx.model_path.suffix}")
-
-    output_path = ctx.output_dir / f"model_{fmt}.tflite"
-
-    if fmt == "pytorch":
-        try:
-            from ultralytics import YOLO
-        except ImportError:
-            raise RuntimeError(
-                "Ultralytics required for PyTorch conversion. Install with: pip install ultralytics"
-            )
-
-        result = YOLO(str(ctx.model_path)).export(
-            format="tflite", imgsz=640, verbose=False
+    if ctx.model_path.suffix not in (".pt", ".pth"):
+        raise ValueError(
+            f"Unsupported format: {ctx.model_path.suffix}. Use .pt or .pth"
         )
-        shutil.copy(result, output_path)
-    else:
-        raise RuntimeError(f"Format {fmt} not yet supported - use PyTorch .pt file")
+
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        raise RuntimeError("Install ultralytics: pip install ultralytics")
+
+    output_path = ctx.output_dir / "model.tflite"
+    result = YOLO(str(ctx.model_path)).export(format="tflite", imgsz=640, verbose=False)
+    shutil.copy(result, output_path)
 
     ctx.tflite_path = output_path
     ctx.save()
@@ -202,36 +182,7 @@ def generate_code(ctx: Context):
     return generate_c_arrays(ctx.optimized_path, ctx.output_dir, ctx.tensor_arena)
 
 
-def build_firmware(model_path: Path, target: str, output_dir: Path):
-    """Build firmware for target platform."""
-    valid_targets = {
-        "esp32": "esp32-s3-devkitc-1",
-        "stm32": "stm32f407vg",
-        "arduino": "esp32-s3",
-    }
-    if target not in valid_targets:
-        raise ValueError(
-            f"Unsupported target: {target}. Use: {list(valid_targets.keys())}"
-        )
-
-    check_file(model_path, "Model file")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Generate C arrays from TFLite, or copy existing C files
-    if model_path.suffix == ".tflite":
-        generate_c_arrays(model_path, output_dir)
-    else:
-        dest = output_dir / f"{model_path.stem}.cc"
-        if model_path.resolve() != dest.resolve():
-            shutil.copy(model_path, dest)
-
-    # Create firmware directory
-    firmware_dir = output_dir / f"firmware_{target}"
-    firmware_dir.mkdir(exist_ok=True)
-
-    # Write Arduino sketch
-    main_cc = firmware_dir / "main.cc"
-    main_cc.write_text("""#include <Arduino.h>
+FIRMWARE_TEMPLATE = """#include <Arduino.h>
 #include "model_data.h"
 
 extern "C" {
@@ -258,18 +209,39 @@ void loop() {
     delay(1000);
     Serial.println("Waiting for inference...");
 }
-""")
+"""
 
-    # Write PlatformIO config
-    platform_io = output_dir / "platformio.ini"
-    platform_io.write_text(f"""[env:{valid_targets[target]}]
+PLATFORMIO_TEMPLATE = """[env:{target}]
 platform = espressif32
-board = {valid_targets[target]}
+board = {board}
 framework = arduino
 monitor_speed = 115200
 build_flags = -DTF_LITE_MICRO
 lib_deps = tensorflow/TensorFlowLite_ESP32@^1.0.0
-""")
+"""
+
+
+def build_firmware(model_path: Path, target: str, output_dir: Path):
+    """Build firmware for target platform."""
+    if target not in TARGETS:
+        raise ValueError(f"Unsupported target: {target}. Use: {list(TARGETS.keys())}")
+
+    check_file(model_path, "Model file")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if model_path.suffix == ".tflite":
+        generate_c_arrays(model_path, output_dir)
+    else:
+        dest = output_dir / f"{model_path.stem}.cc"
+        if model_path.resolve() != dest.resolve():
+            shutil.copy(model_path, dest)
+
+    firmware_dir = output_dir / f"firmware_{target}"
+    firmware_dir.mkdir(exist_ok=True)
+    (firmware_dir / "main.cc").write_text(FIRMWARE_TEMPLATE)
+    (output_dir / "platformio.ini").write_text(
+        PLATFORMIO_TEMPLATE.format(target=target, board=TARGETS[target])
+    )
 
     return str(firmware_dir)
 
