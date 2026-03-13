@@ -1,10 +1,11 @@
 """
-Tests for OpenEdge CLI
+Tests for OpenEdge CLI - Stricter tests for correctness verification
 """
 
 import pytest
 from pathlib import Path
 import tempfile
+import re
 
 from openedge.cli import (
     Context,
@@ -18,6 +19,69 @@ from openedge.cli import (
     validate_model,
     create_context,
 )
+
+
+class TestCArrayGeneration:
+    """Tests for C array generation - critical for valid C code"""
+
+    def test_hex_format_has_0x_prefix(self):
+        """Verify C hex values have correct 0x prefix, not just 0"""
+        with tempfile.TemporaryDirectory() as tmp:
+            # Create a simple TFLite file with known bytes
+            tflite_file = Path(tmp) / "model.tflite"
+            tflite_file.write_bytes(b"\x01\x02\x0a\x0f\x10\xff")  # Known bytes
+
+            output_dir = Path(tmp) / "output"
+            result = generate_c_arrays(tflite_file, output_dir)
+
+            cc_content = Path(result["cc"]).read_text()
+
+            # Check that hex values have 0x prefix
+            assert "0x01" in cc_content, "Missing 0x prefix"
+            assert "0x02" in cc_content, "Missing 0x prefix"
+            assert "0x0a" in cc_content, "Missing 0x prefix"
+            assert "0xff" in cc_content, "Missing 0x prefix"
+
+            # Ensure wrong format (just 0 without x) is NOT present
+            assert "01," not in cc_content or "0x01" in cc_content
+            assert "0x" in cc_content, "No hex values found"
+
+    def test_c_array_syntax_valid(self):
+        """Verify generated C code is syntactically valid"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tflite_file = Path(tmp) / "model.tflite"
+            tflite_file.write_bytes(b"\x01\x02\x03")
+
+            output_dir = Path(tmp) / "output"
+            result = generate_c_arrays(tflite_file, output_dir)
+
+            cc_content = Path(result["cc"]).read_text()
+
+            # Basic syntax checks
+            assert "#include" in cc_content
+            assert "const unsigned char model_data[]" in cc_content
+            assert "{" in cc_content
+            assert "};" in cc_content
+
+            # Check array is properly formatted
+            assert re.search(r"0x[0-9a-f]{2}", cc_content), "No hex values"
+
+    def test_h_file_has_guards(self):
+        """Verify header file has include guards"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tflite_file = Path(tmp) / "model.tflite"
+            tflite_file.write_bytes(b"test")
+
+            output_dir = Path(tmp) / "output"
+            result = generate_c_arrays(tflite_file, output_dir)
+
+            h_content = Path(result["h"]).read_text()
+
+            assert "#ifndef" in h_content
+            assert "#define" in h_content
+            assert "#endif" in h_content
+            assert "MODEL_SIZE" in h_content
+            assert "TENSOR_ARENA_SIZE" in h_content
 
 
 class TestContext:
@@ -98,6 +162,22 @@ class TestBuild:
             assert (tmp_path / "model_data.cc").exists()
             assert (tmp_path / "platformio.ini").exists()
 
+    def test_platformio_has_tflite_deps(self):
+        """Verify platformio.ini has TFLite dependencies"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            model_file = tmp_path / "model.tflite"
+            model_file.write_bytes(b"fake")
+
+            build_firmware(model_file, "esp32", tmp_path)
+
+            platformio_content = (tmp_path / "platformio.ini").read_text()
+
+            assert "lib_deps" in platformio_content, "Missing TFLite lib_deps"
+            assert "TensorFlowLite" in platformio_content, "Missing TensorFlowLite"
+            assert "build_flags" in platformio_content, "Missing build_flags"
+            assert "TF_LITE_MICRO" in platformio_content, "Missing TF_LITE_MICRO"
+
     def test_build_stm32(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = build_firmware(Path("/tmp/test_model.tflite"), "stm32", Path(tmp))
@@ -113,6 +193,35 @@ class TestValidate:
             dataset_dir.mkdir()
             with pytest.raises(ValueError):
                 validate_model(model_file, dataset_dir)
+
+    def test_returns_inference_success_rate_not_accuracy(self):
+        """Verify validate returns inference_success_rate, not misleading accuracy"""
+        try:
+            import tensorflow as tf
+        except ImportError:
+            pytest.skip("TensorFlow not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_file = Path(tmp) / "model.tflite"
+            model_file.write_bytes(b"fake tflite")
+
+            # Create test image
+            from PIL import Image
+
+            img_dir = Path(tmp) / "images"
+            img_dir.mkdir()
+            Image.new("RGB", (10, 10)).save(img_dir / "test.jpg")
+
+            result = validate_model(model_file, img_dir)
+
+            # Must have inference_success_rate, not accuracy
+            assert "inference_success_rate" in result, "Missing inference_success_rate"
+            assert "successful_inferences" in result
+            assert "total_images" in result
+            # Should NOT have misleading "accuracy" field
+            assert "accuracy" not in result or result.get("accuracy") == result.get(
+                "inference_success_rate"
+            )
 
 
 class TestUtils:

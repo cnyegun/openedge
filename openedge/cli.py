@@ -65,7 +65,7 @@ def generate_c_arrays(tflite_path: Path, output_dir: Path, tensor_arena: int = N
     cc_path = output_dir / "model_data.cc"
     cc_path.write_text(
         '#include "model_data.h"\nconst unsigned char model_data[] = {\n'
-        + ", ".join(f"0{b:02x}" for b in data)
+        + ", ".join(f"0x{b:02x}" for b in data)
         + "\n};"
     )
 
@@ -256,6 +256,9 @@ void loop() {
 platform = espressif32
 board = {valid_targets[target]}
 framework = arduino
+monitor_speed = 115200
+build_flags = -DTF_LITE_MICRO
+lib_deps = tensorflow/TensorFlowLite_ESP32@^1.0.0
 """)
 
     return str(firmware_dir)
@@ -300,9 +303,11 @@ def validate_model(model_path: Path, dataset_path: Path, verbose: bool = False):
                 print(f"Warning: Failed to process {img_path}: {e}")
 
     return {
-        "accuracy": (successful / len(images)) * 100,
+        "inference_success_rate": (successful / len(images)) * 100,
         "latency_ms": sum(latencies) / len(latencies) if latencies else 0,
         "memory": 0,
+        "successful_inferences": successful,
+        "total_images": len(images),
     }
 
 
@@ -348,6 +353,9 @@ def deploy(
 
     generate_code(ctx)
     typer.echo(f"  Generated: {output}/model_data.cc")
+
+    build_firmware(ctx.optimized_path, target, output)
+    typer.echo(f"  Built: {output}/firmware_{target}")
 
     typer.echo(f"\nDone! Output in {output}")
 
@@ -418,7 +426,9 @@ def validate(
 ):
     """Test model accuracy on dataset."""
     result = validate_model(model, dataset, verbose)
-    typer.echo(f"Accuracy: {result['accuracy']:.0f}%")
+    typer.echo(
+        f"Inference success: {result['inference_success_rate']:.0f}% ({result['successful_inferences']}/{result['total_images']})"
+    )
     typer.echo(f"Latency: {result['latency_ms']:.0f}ms")
 
 
