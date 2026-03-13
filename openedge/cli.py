@@ -171,6 +171,9 @@ def optimize_model(ctx: Context) -> Context:
 
     check_file(input_path, "TFLite model")
 
+    # Ensure output directory exists
+    ctx.output_dir.mkdir(parents=True, exist_ok=True)
+
     output_path = ctx.output_dir / "model_optimized.tflite"
     shutil.copy(input_path, output_path)
 
