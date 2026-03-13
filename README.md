@@ -55,10 +55,12 @@ openedge validate output/model_optimized.tflite --dataset test_images/
 ```
 $ openedge deploy yolov8n.pt --target esp32 --output firmware/
 Deploying yolov8n.pt to esp32...
-  Converted: firmware/model_pytorch.tflite
-  Optimized: firmware/model_optimized.tflite
+  Converted: output/model.tflite
+  Quantized: output/model_int8.tflite
+  Optimized: output/model_optimized.tflite
   Tensor arena: 8047019 bytes
-  Generated: firmware/model_data.cc
+  Generated: output/model_data.cc
+  Built: output/firmware_esp32
 
 Done! Output in firmware/
 ```
