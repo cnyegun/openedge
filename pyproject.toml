@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-openedge = "openedge.cli:main"
+openedge = "openedge.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
