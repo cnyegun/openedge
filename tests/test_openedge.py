@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import re
 
-from openedge.cli import (
+from openedge.app import (
     Context,
     generate_c_arrays,
     check_file,

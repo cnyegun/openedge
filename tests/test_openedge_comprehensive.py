@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 import numpy as np
 
-from openedge.cli import (
+from openedge.app import (
     generate_c_arrays,
     build_firmware,
     create_context,
