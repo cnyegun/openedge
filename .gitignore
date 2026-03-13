@@ -46,6 +46,7 @@ firmware/
 *.pth
 *.h5
 *.keras
+*.npy
 
 # Testing
 .pytest_cache/
