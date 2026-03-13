@@ -1,262 +1,428 @@
-import typer, os, shutil, json, time
+"""
+OpenEdge - Embedded ML deployment pipeline
+Simple CLI for converting and deploying YOLO models to embedded devices.
+"""
+
+import typer
+import os
+import shutil
+import json
+import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 import numpy as np
 
-app = typer.Typer()
+app = typer.Typer(help="OpenEdge - Deploy ML models to embedded devices")
 
 
+# === Context: Stores pipeline state ===
 @dataclass
-class C:
-    m: Optional[Path] = None
-    t: str = "esp32"
-    o: Path = Path("output")
-    tp: Optional[Path] = None
-    qp: Optional[Path] = None
-    op: Optional[Path] = None
-    ta: Optional[int] = None
+class Context:
+    model_path: Optional[Path] = None
+    target: str = "esp32"
+    output_dir: Path = Path("output")
+    tflite_path: Optional[Path] = None
+    quantized_path: Optional[Path] = None
+    optimized_path: Optional[Path] = None
+    tensor_arena: Optional[int] = None
 
-    def s(self, p=None):
-        (p or self.o / "c.json").write_text(
-            json.dumps(
-                {k: str(v) if isinstance(v, Path) else v for k, v in vars(self).items()}
-            )
-        )
+    def save(self, path: Path = None):
+        """Save context to JSON file."""
+        save_path = path or self.output_dir / "context.json"
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {k: str(v) if isinstance(v, Path) else v for k, v in vars(self).items()}
+        save_path.write_text(json.dumps(data, indent=2))
 
     @classmethod
-    def l(cls, p):
-        d = json.loads(p.read_text())
+    def load(cls, path: Path) -> "Context":
+        """Load context from JSON file."""
+        data = json.loads(path.read_text())
         return cls(
-            m=Path(d.get("m")),
-            t=d.get("t", "esp32"),
-            o=Path(d.get("o", "o")),
-            tp=Path(d["tp"]) if d.get("tp") else None,
-            qp=Path(d["qp"]) if d.get("qp") else None,
-            op=Path(d["op"]) if d.get("op") else None,
-            ta=d.get("ta"),
+            model_path=Path(data.get("model_path")) if data.get("model_path") else None,
+            target=data.get("target", "esp32"),
+            output_dir=Path(data.get("output_dir", "output")),
+            tflite_path=Path(data["tflite_path"]) if data.get("tflite_path") else None,
+            quantized_path=Path(data["quantized_path"])
+            if data.get("quantized_path")
+            else None,
+            optimized_path=Path(data["optimized_path"])
+            if data.get("optimized_path")
+            else None,
+            tensor_arena=data.get("tensor_arena"),
         )
 
 
-def g(t, o, a=None):
-    o.mkdir(parents=True, exist_ok=True)
-    d = t.read_bytes()
-    s = os.path.getsize(t)
-    a = a or s * 2
-    (o / "md.cc").write_text(
-        '#include "md.h"\nconst unsigned char model_data[] = {\n'
-        + ", ".join(f"0{b:02x}" for b in d)
+# === Utilities ===
+def generate_c_arrays(tflite_path: Path, output_dir: Path, tensor_arena: int = None):
+    """Convert TFLite model to C arrays for embedded compilation."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data = tflite_path.read_bytes()
+    size = os.path.getsize(tflite_path)
+    arena = tensor_arena or size * 2
+
+    # Generate .cc file with model data as byte array
+    cc_path = output_dir / "model_data.cc"
+    cc_path.write_text(
+        '#include "model_data.h"\nconst unsigned char model_data[] = {\n'
+        + ", ".join(f"0{b:02x}" for b in data)
         + "\n};"
     )
-    (o / "md.h").write_text(
-        f"#ifndef MD\n#define MD\n#define MS {s}\n#define TA {a}\nextern const unsigned char model_data[];\n#endif"
+
+    # Generate .h file with size constants
+    h_path = output_dir / "model_data.h"
+    h_path.write_text(
+        f"#ifndef MODEL_DATA_H\n#define MODEL_DATA_H\n#define MODEL_SIZE {size}\n#define TENSOR_ARENA_SIZE {arena}\nextern const unsigned char model_data[];\n#endif"
     )
-    return {"cc": str(o / "md.cc"), "h": str(o / "md.h")}
+
+    return {"cc": str(cc_path), "h": str(h_path)}
 
 
-def chk(p, n="f"):
-    if not p.exists():
-        raise FileNotFoundError(f"{n} not found")
-    if p.stat().st_size == 0:
-        raise ValueError(f"{n} is empty")
+def check_file(path: Path, name: str = "file"):
+    """Validate that a file exists and is not empty."""
+    if not path.exists():
+        raise FileNotFoundError(f"{name} not found: {path}")
+    if path.stat().st_size == 0:
+        raise ValueError(f"{name} is empty: {path}")
 
 
-def cnv(c):
-    if not c.m:
+# === Core Pipeline Functions ===
+def convert_model(ctx: Context) -> Context:
+    """Convert PyTorch/ONNX/Keras model to TFLite format."""
+    if not ctx.model_path:
         raise ValueError("model_path required")
-    c.o.mkdir(parents=True, exist_ok=True)
-    fmt = {
+
+    ctx.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Detect format from file extension
+    fmt_map = {
         ".pt": "pytorch",
         ".pth": "pytorch",
         ".onnx": "onnx",
         ".h5": "keras",
         ".keras": "keras",
-    }.get(c.m.suffix.lower())
+    }
+    fmt = fmt_map.get(ctx.model_path.suffix.lower())
     if not fmt:
-        raise ValueError(f"Bad: {c.m.suffix}")
-    out = c.o / f"model_{fmt}.tflite"
+        raise ValueError(f"Unsupported format: {ctx.model_path.suffix}")
+
+    output_path = ctx.output_dir / f"model_{fmt}.tflite"
+
     if fmt == "pytorch":
         from ultralytics import YOLO
 
-        shutil.copy(
-            YOLO(str(c.m)).export(format="tflite", imgsz=640, verbose=False), out
+        result = YOLO(str(ctx.model_path)).export(
+            format="tflite", imgsz=640, verbose=False
         )
+        shutil.copy(result, output_path)
     else:
-        raise RuntimeError("Only PyTorch")
-    c.tp = out
-    c.s()
-    return c
+        raise RuntimeError(f"Format {fmt} not yet supported - use PyTorch .pt file")
+
+    ctx.tflite_path = output_path
+    ctx.save()
+    return ctx
 
 
-def qn(c, cd):
-    chk(c.tp, "TFLite")
-    imgs = list(cd.glob("*.jpg")) + list(cd.glob("*.png"))
-    if not imgs:
-        raise ValueError(f"No imgs: {cd}")
+def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
+    """Quantize TFLite model to INT8 for smaller size."""
+    check_file(ctx.tflite_path, "TFLite model")
+
+    # Get calibration images
+    images = list(calibration_dir.glob("*.jpg")) + list(calibration_dir.glob("*.png"))
+    if not images:
+        raise ValueError(f"No images found in {calibration_dir}")
+
     from PIL import Image
 
-    def gn():
-        for i in imgs:
+    # Create representative dataset generator
+    def representative_data():
+        for img_path in images:
             try:
-                yield [
-                    np.array(Image.open(i).resize((640, 640))).astype(np.float32)
-                    / 255.0
-                ]
+                img = Image.open(img_path).resize((640, 640))
+                arr = np.array(img).astype(np.float32) / 255.0
+                yield [arr]
             except:
                 continue
 
     import tensorflow as tf
 
-    cv = tf.lite.TFLiteConverter.from_flat_file(str(c.tp))
-    cv.optimizations = [tf.lite.Optimize.DEFAULT]
-    cv.representative_dataset = gn
-    cv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    cv.inference_input_type = cv.inference_output_type = tf.uint8
-    (c.o / "model_int8.tflite").write_bytes(cv.convert())
-    c.qp = c.o / "model_int8.tflite"
-    c.s()
-    return c
+    # Configure quantization
+    converter = tf.lite.TFLiteConverter.from_flat_file(str(ctx.tflite_path))
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.representative_dataset = representative_data
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    converter.inference_input_type = tf.uint8
+    converter.inference_output_type = tf.uint8
+
+    # Convert and save
+    output_path = ctx.output_dir / "model_int8.tflite"
+    output_path.write_bytes(converter.convert())
+
+    ctx.quantized_path = output_path
+    ctx.save()
+    return ctx
 
 
-def opt(c):
-    i = c.qp or c.tp
-    if not i:
-        raise ValueError("need tflite")
-    chk(i, "TFLite")
-    out = c.o / "model_optimized.tflite"
-    shutil.copy(i, out)
-    c.ta = int(os.path.getsize(out) * 2 * 1.15)
-    c.op = out
-    c.s()
-    return c
+def optimize_model(ctx: Context) -> Context:
+    """Optimize model for TFLite Micro."""
+    input_path = ctx.quantized_path or ctx.tflite_path
+    if not input_path:
+        raise ValueError("tflite_path or quantized_path required")
+
+    check_file(input_path, "TFLite model")
+
+    output_path = ctx.output_dir / "model_optimized.tflite"
+    shutil.copy(input_path, output_path)
+
+    # Estimate tensor arena size (2x model size * 1.15 safety margin)
+    size = os.path.getsize(output_path)
+    ctx.tensor_arena = int(size * 2 * 1.15)
+    ctx.optimized_path = output_path
+    ctx.save()
+    return ctx
 
 
-def gen(c):
-    return g(c.op, c.o, c.ta)
+def generate_code(ctx: Context):
+    """Generate C code from optimized TFLite model."""
+    if not ctx.optimized_path:
+        raise ValueError("optimized_path required")
+    return generate_c_arrays(ctx.optimized_path, ctx.output_dir, ctx.tensor_arena)
 
 
-def bld(m, t, o):
-    if t not in {
-        "esp32": "esp32-s3-devkitc-1",
-        "stm32": "stm32f407vg",
-        "arduino": "esp32-s3",
-    }:
-        raise ValueError(f"Bad: {t}")
-    chk(m, "Model")
-    o.mkdir(parents=True, exist_ok=True)
-    if m.suffix == ".tflite":
-        g(m, o)
-    else:
-        dest = o / f"{m.stem}.cc"
-        if m.resolve() != dest.resolve():
-            shutil.copy(m, dest)
-    (o / f"firmware_{t}").mkdir(exist_ok=True)
-    (o / f"firmware_{t}/main.cc").write_text(
-        '#include <Arduino.h>\n#include "model_data.h"\nextern "C" {#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"}\nstatic tflite::MicroMutableOpResolver<10> r;\nstatic uint8_t tA[TA];\nvoid setup() {Serial.begin(115200); auto *m = tflite::GetModel(model_data); r.AddAdd(); r.AddConv2D(); r.AddDepthwiseConv2D(); r.AddMaxPool2D(); static tflite::MicroInterpreter i(m, r, tA, TA); i.AllocateTensors(); Serial.println("OK");}\nvoid loop() {delay(1000);}'
-    )
-    boards = {
+def build_firmware(model_path: Path, target: str, output_dir: Path):
+    """Build firmware for target platform."""
+    valid_targets = {
         "esp32": "esp32-s3-devkitc-1",
         "stm32": "stm32f407vg",
         "arduino": "esp32-s3",
     }
-    (o / "platformio.ini").write_text(
-        f"[env]\nplatform = espressif32\nboard = {boards[t]}\nframework = arduino"
-    )
-    return str(o / f"firmware_{t}")
+    if target not in valid_targets:
+        raise ValueError(
+            f"Unsupported target: {target}. Use: {list(valid_targets.keys())}"
+        )
+
+    check_file(model_path, "Model file")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate C arrays from TFLite, or copy existing C files
+    if model_path.suffix == ".tflite":
+        generate_c_arrays(model_path, output_dir)
+    else:
+        dest = output_dir / f"{model_path.stem}.cc"
+        if model_path.resolve() != dest.resolve():
+            shutil.copy(model_path, dest)
+
+    # Create firmware directory
+    firmware_dir = output_dir / f"firmware_{target}"
+    firmware_dir.mkdir(exist_ok=True)
+
+    # Write Arduino sketch
+    main_cc = firmware_dir / "main.cc"
+    main_cc.write_text("""#include <Arduino.h>
+#include "model_data.h"
+
+extern "C" {
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+}
+
+static tflite::MicroMutableOpResolver<10> resolver;
+static uint8_t tensor_arena[TENSOR_ARENA_SIZE];
+
+void setup() {
+    Serial.begin(115200);
+    const tflite::Model* model = tflite::GetModel(model_data);
+    resolver.AddAdd();
+    resolver.AddConv2D();
+    resolver.AddDepthwiseConv2D();
+    resolver.AddMaxPool2D();
+    static tflite::MicroInterpreter interpreter(model, resolver, tensor_arena, TENSOR_ARENA_SIZE);
+    interpreter.AllocateTensors();
+    Serial.println("Model loaded. Ready for inference.");
+}
+
+void loop() {
+    delay(1000);
+    Serial.println("Waiting for inference...");
+}
+""")
+
+    # Write PlatformIO config
+    platform_io = output_dir / "platformio.ini"
+    platform_io.write_text(f"""[env:{valid_targets[target]}]
+platform = espressif32
+board = {valid_targets[target]}
+framework = arduino
+""")
+
+    return str(firmware_dir)
 
 
-def val(m, d, v=False):
+def validate_model(model_path: Path, dataset_path: Path, verbose: bool = False):
+    """Test model on dataset and return accuracy metrics."""
     from PIL import Image
 
-    chk(m, "TFLite")
-    if not d.exists():
-        raise FileNotFoundError(f"DS: {d}")
-    imgs = list(d.glob("*.jpg")) + list(d.glob("*.png"))
-    if not imgs:
-        raise ValueError(f"No imgs: {d}")
+    check_file(model_path, "TFLite model")
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+
+    images = list(dataset_path.glob("*.jpg")) + list(dataset_path.glob("*.png"))
+    if not images:
+        raise ValueError(f"No images found in {dataset_path}")
+
     import tensorflow as tf
 
-    i = tf.lite.Interpreter(model_path=str(m))
-    i.allocate_tensors()
-    inp, out = i.get_input_details()[0]["index"], i.get_output_details()[0]["index"]
-    lat, ok = [], 0
-    for im in imgs:
+    interpreter = tf.lite.Interpreter(model_path=str(model_path))
+    interpreter.allocate_tensors()
+    input_index = interpreter.get_input_details()[0]["index"]
+    output_index = interpreter.get_output_details()[0]["index"]
+
+    latencies = []
+    successful = 0
+
+    for img_path in images:
         try:
-            a = np.expand_dims(
-                np.array(Image.open(im).resize((640, 640))).astype(np.float32) / 255.0,
-                0,
-            )
-            t = time.perf_counter()
-            i.set_tensor(inp, a)
-            i.invoke()
-            lat.append((time.perf_counter() - t) * 1000)
-            ok += 1
-        except:
-            pass
+            img = Image.open(img_path).resize((640, 640))
+            arr = np.expand_dims(np.array(img).astype(np.float32) / 255.0, 0)
+
+            start = time.perf_counter()
+            interpreter.set_tensor(input_index, arr)
+            interpreter.invoke()
+            latency = (time.perf_counter() - start) * 1000
+
+            latencies.append(latency)
+            successful += 1
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Failed to process {img_path}: {e}")
+
     return {
-        "accuracy": (ok / len(imgs)) * 100,
-        "latency_ms": sum(lat) / len(lat) if lat else 0,
+        "accuracy": (successful / len(images)) * 100,
+        "latency_ms": sum(latencies) / len(latencies) if latencies else 0,
         "memory": 0,
     }
 
 
-def _c(model=None, tflite=None, optimized=None, target="esp32", output=None):
-    return C(m=model, tp=tflite, op=optimized, t=target, o=output or Path("output"))
+def create_context(
+    model_path=None,
+    tflite_path=None,
+    optimized_path=None,
+    target="esp32",
+    output_dir=None,
+):
+    """Helper to create Context with sensible defaults."""
+    return Context(
+        model_path=model_path,
+        tflite_path=tflite_path,
+        optimized_path=optimized_path,
+        target=target,
+        output_dir=output_dir or Path("output"),
+    )
 
 
+# === CLI Commands ===
 @app.command()
 def deploy(
-    m: Path, t: str = "esp32", o: Path = Path("output"), cal: Optional[Path] = None
+    model: Path = typer.Option(..., help="Input model file (.pt)"),
+    target: str = typer.Option("esp32", help="Target platform"),
+    output: Path = typer.Option(Path("output"), help="Output directory"),
+    calibration: Optional[Path] = typer.Option(None, help="Calibration images folder"),
 ):
-    c = _c(model=m, target=t, output=o)
-    cnv(c)
-    print(f"+ {c.tp}")
-    if cal:
-        qn(c, cal)
-        print(f"+ {c.qp}")
-    opt(c)
-    print(f"+ {c.op}")
-    gen(c)
-    print(f"+ {o}/model_data.cc")
+    """Full pipeline: convert -> quantize -> optimize -> generate -> build"""
+    ctx = create_context(model_path=model, target=target, output_dir=output)
+
+    typer.echo(f"Deploying {model} to {target}...")
+
+    ctx = convert_model(ctx)
+    typer.echo(f"  Converted: {ctx.tflite_path}")
+
+    if calibration:
+        ctx = quantize_model(ctx, calibration)
+        typer.echo(f"  Quantized: {ctx.quantized_path}")
+
+    ctx = optimize_model(ctx)
+    typer.echo(f"  Optimized: {ctx.optimized_path}")
+
+    generate_code(ctx)
+    typer.echo(f"  Generated: {output}/model_data.cc")
+
+    typer.echo(f"\nDone! Output in {output}")
 
 
 @app.command()
-def convert_cmd(m: Path, o: Path = Path("output"), t: str = "esp32"):
-    cnv(_c(model=m, target=t, output=o))
-    print(f"+ {C.tp}")
+def convert(
+    model: Path = typer.Argument(..., help="Input model file"),
+    output: Path = typer.Option(Path("output"), help="Output directory"),
+    target: str = typer.Option("esp32", help="Target platform"),
+):
+    """Convert model to TFLite format."""
+    ctx = create_context(model_path=model, target=target, output_dir=output)
+    ctx = convert_model(ctx)
+    typer.echo(f"Converted: {ctx.tflite_path}")
 
 
 @app.command()
-def quantize_cmd(m: Path, cal: Path, o: Path = Path("output")):
-    qn(_c(tflite=m, output=o), cal)
-    print(f"+ {C.qp}")
+def quantize(
+    model: Path = typer.Argument(..., help="Input TFLite model"),
+    calibration: Path = typer.Argument(..., help="Calibration images folder"),
+    output: Path = typer.Option(Path("output"), help="Output directory"),
+):
+    """Quantize model to INT8."""
+    ctx = create_context(tflite_path=model, output_dir=output)
+    ctx = quantize_model(ctx, calibration)
+    typer.echo(f"Quantized: {ctx.quantized_path}")
 
 
 @app.command()
-def optimize_cmd(m: Path, o: Path = Path("output")):
-    opt(_c(tflite=m, output=o))
-    print(f"+ {C.op}")
+def optimize(
+    model: Path = typer.Argument(..., help="Input TFLite model"),
+    output: Path = typer.Option(Path("output"), help="Output directory"),
+):
+    """Optimize model for TFLite Micro."""
+    ctx = create_context(tflite_path=model, output_dir=output)
+    ctx = optimize_model(ctx)
+    typer.echo(f"Optimized: {ctx.optimized_path}")
+    typer.echo(f"Tensor arena: {ctx.tensor_arena} bytes")
 
 
 @app.command()
-def generate_cmd(m: Path, o: Path = Path("output")):
-    print(f"+ {gen(_c(optimized=m, output=o))['cc']}")
+def generate(
+    model: Path = typer.Argument(..., help="Input TFLite model"),
+    output: Path = typer.Option(Path("output"), help="Output directory"),
+):
+    """Generate C code from TFLite model."""
+    ctx = create_context(optimized_path=model, output_dir=output)
+    paths = generate_code(ctx)
+    typer.echo(f"Generated: {paths['cc']}")
 
 
 @app.command()
-def build_cmd(m: Path, t: str = "esp32", o: Path = Path("firmware")):
-    print(f"+ {bld(m, t, o)}")
+def build(
+    model: Path = typer.Argument(..., help="Input model (TFLite or .cc)"),
+    target: str = typer.Option("esp32", help="Target platform"),
+    output: Path = typer.Option(Path("firmware"), help="Output directory"),
+):
+    """Build firmware for target platform."""
+    result = build_firmware(model, target, output)
+    typer.echo(f"Firmware built: {result}")
 
 
 @app.command()
-def validate_cmd(m: Path, d: Path, v: bool = False):
-    r = val(m, d, v)
-    print(f"Acc: {r['accuracy']:.0f}% | Lat: {r['latency_ms']:.0f}ms")
+def validate(
+    model: Path = typer.Argument(..., help="Input TFLite model"),
+    dataset: Path = typer.Argument(..., help="Test images folder"),
+    verbose: bool = typer.Option(False, help="Show warnings"),
+):
+    """Test model accuracy on dataset."""
+    result = validate_model(model, dataset, verbose)
+    typer.echo(f"Accuracy: {result['accuracy']:.0f}%")
+    typer.echo(f"Latency: {result['latency_ms']:.0f}ms")
 
 
 @app.command()
 def version():
-    print("OpenEdge v0.1.0")
+    """Show version."""
+    typer.echo("OpenEdge v0.1.0")
 
 
 if __name__ == "__main__":

@@ -1,33 +1,52 @@
+"""
+Tests for OpenEdge CLI
+"""
+
 import pytest
 from pathlib import Path
 import tempfile
 
-from openedge.cli import C, g, chk, cnv, qn, opt, gen, bld, val, _c
+from openedge.cli import (
+    Context,
+    generate_c_arrays,
+    check_file,
+    convert_model,
+    quantize_model,
+    optimize_model,
+    generate_code,
+    build_firmware,
+    validate_model,
+    create_context,
+)
 
 
 class TestContext:
-    def test_context_creation(self):
-        ctx = C(m=Path("model.pt"), t="esp32", o=Path("output"))
-        assert ctx.m == Path("model.pt")
-        assert ctx.t == "esp32"
-        assert ctx.o == Path("output")
+    def test_create_context(self):
+        ctx = create_context(
+            model_path=Path("model.pt"), target="esp32", output_dir=Path("output")
+        )
+        assert ctx.model_path == Path("model.pt")
+        assert ctx.target == "esp32"
+        assert ctx.output_dir == Path("output")
 
-    def test_context_save_load(self):
+    def test_save_and_load(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ctx = C(m=Path("model.pt"), t="esp32", o=Path(tmp))
-            ctx.tp = Path(tmp) / "model.tflite"
-            ctx.ta = 1000000
-            ctx.s()
-            loaded = C.l(Path(tmp) / "c.json")
-            assert loaded.t == "esp32"
-            assert loaded.ta == 1000000
+            ctx = create_context(
+                model_path=Path("model.pt"), target="esp32", output_dir=Path(tmp)
+            )
+            ctx.tflite_path = Path(tmp) / "model.tflite"
+            ctx.tensor_arena = 1000000
+            ctx.save()
+            loaded = Context.load(Path(tmp) / "context.json")
+            assert loaded.target == "esp32"
+            assert loaded.tensor_arena == 1000000
 
 
 class TestConvert:
-    def test_convert_run_requires_model_path(self):
-        ctx = C(o=Path("output"))
+    def test_convert_requires_model_path(self):
+        ctx = create_context(output_dir=Path("output"))
         with pytest.raises(ValueError):
-            cnv(ctx)
+            convert_model(ctx)
 
 
 class TestQuantize:
@@ -38,18 +57,18 @@ class TestQuantize:
             tflite_file.write_bytes(b"fake tflite")
             calib_dir = tmp_path / "calib"
             calib_dir.mkdir()
-            ctx = C(tp=tflite_file, o=tmp_path)
+            ctx = create_context(tflite_path=tflite_file, output_dir=tmp_path)
             with pytest.raises(ValueError):
-                qn(ctx, calib_dir)
+                quantize_model(ctx, calib_dir)
 
 
 class TestGenerate:
-    def test_gen_c(self):
+    def test_generate_c_arrays(self):
         with tempfile.TemporaryDirectory() as tmp:
             tflite_file = Path(tmp) / "model.tflite"
             tflite_file.write_bytes(b"fake tflite data")
             output_dir = Path(tmp) / "output"
-            result = g(tflite_file, output_dir)
+            result = generate_c_arrays(tflite_file, output_dir)
             assert Path(result["cc"]).exists()
             assert Path(result["h"]).exists()
 
@@ -57,9 +76,9 @@ class TestGenerate:
 class TestOptimize:
     def test_optimize_requires_input(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ctx = C(o=Path(tmp))
+            ctx = create_context(output_dir=Path(tmp))
             with pytest.raises(ValueError):
-                opt(ctx)
+                optimize_model(ctx)
 
 
 class TestBuild:
@@ -68,20 +87,20 @@ class TestBuild:
             model_file = Path(tmp) / "model.tflite"
             model_file.write_bytes(b"fake")
             with pytest.raises(ValueError):
-                bld(model_file, "bad_target", Path(tmp))
+                build_firmware(model_file, "bad_target", Path(tmp))
 
     def test_build_esp32(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            result = bld(Path("/tmp/test_model.tflite"), "esp32", tmp_path)
+            result = build_firmware(Path("/tmp/test_model.tflite"), "esp32", tmp_path)
             result_path = Path(result)
             assert result_path.exists()
-            assert (tmp_path / "md.cc").exists()
+            assert (tmp_path / "model_data.cc").exists()
             assert (tmp_path / "platformio.ini").exists()
 
     def test_build_stm32(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = bld(Path("/tmp/test_model.tflite"), "stm32", Path(tmp))
+            result = build_firmware(Path("/tmp/test_model.tflite"), "stm32", Path(tmp))
             assert Path(result).exists()
 
 
@@ -93,23 +112,23 @@ class TestValidate:
             dataset_dir = Path(tmp) / "dataset"
             dataset_dir.mkdir()
             with pytest.raises(ValueError):
-                val(model_file, dataset_dir)
+                validate_model(model_file, dataset_dir)
 
 
 class TestUtils:
-    def test_chk_exists(self):
+    def test_check_file_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "test.txt"
             f.write_text("content")
-            chk(f, "test")
+            check_file(f, "test")
 
-    def test_chk_not_found(self):
+    def test_check_file_not_found(self):
         with pytest.raises(FileNotFoundError):
-            chk(Path("nonexistent.txt"), "file")
+            check_file(Path("nonexistent.txt"), "file")
 
-    def test_chk_empty(self):
+    def test_check_file_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "empty.txt"
             f.touch()
             with pytest.raises(ValueError):
-                chk(f, "file")
+                check_file(f, "file")
