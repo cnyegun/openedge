@@ -5,7 +5,10 @@ Open-source embedded ML deployment pipeline. Convert and deploy YOLO models to e
 ## Install
 
 ```bash
-pip install openedge
+# Clone and install from GitHub
+git clone https://github.com/cnyegun/openedge
+cd openedge
+pip install -e .
 
 # For YOLO conversion (optional)
 pip install ultralytics
