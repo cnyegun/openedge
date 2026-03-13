@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openedge"
+version = "0.1.0"
+description = "Open-source embedded ML deployment pipeline"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+authors = [{name = "OpenEdge Team"}]
+dependencies = [
+    "typer>=0.12.0",
+    "click>=8.1.0",
+    "onnx>=1.15.0",
+    "onnxruntime>=1.16.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+]
+
+[project.scripts]
+openedge = "openedge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openedge*"]
