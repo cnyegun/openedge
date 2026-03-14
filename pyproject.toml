@@ -22,7 +22,7 @@ tf = ["tensorflow>=2.15.0"]
 all = ["ultralytics>=8.0.0", "tensorflow>=2.15.0"]
 
 [project.scripts]
-openedge = "openedge.app:app"
+openedge = "openedge.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
