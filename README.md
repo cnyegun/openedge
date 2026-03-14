@@ -82,6 +82,22 @@ Currently supports YOLOv8 models in PyTorch format:
 - RAM: 8MB for tensor arena during inference
 - Inference time: ~30ms on ESP32-S3
 
+## Known Limitations (v0.1.0)
+
+1. **Validation command** uses hardcoded tensor indices optimized for YOLOv8n. May not work with other model architectures.
+
+2. **Firmware template** includes basic TFLite ops (Conv2D, MaxPool, etc.). Complex models may require adding additional ops to `main.cc`.
+
+3. **INT8 quantization** uses ultralytics' internal calibration. For custom calibration, export manually with `YOLO.export(data='custom.yaml')`.
+
+## Performance Metrics
+
+Tested on 100 COCO validation images:
+- **Compression:** 3.8x (13MB → 3.4MB)
+- **Speedup:** 2.9x faster (80ms → 28ms)
+- **Accuracy:** 99.04% match with FP32 (0.96% relative error)
+- **Flash:** Fits on ESP32 (3.4MB < 4MB limit)
+
 ## License
 
 Apache 2.0
