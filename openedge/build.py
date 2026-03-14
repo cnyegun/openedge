@@ -108,8 +108,9 @@ def build_firmware(model_path: Path, target: str, output_dir: Path) -> str:
     firmware_dir = output_dir / f"firmware_{target}"
     firmware_dir.mkdir(exist_ok=True)
 
-    # Write firmware files
-    (firmware_dir / "main.cc").write_text(FIRMWARE_TEMPLATE)
+    # Write firmware files (Arduino uses .ino, others use .cc)
+    main_ext = "ino" if target == "arduino" else "cc"
+    (firmware_dir / f"main.{main_ext}").write_text(FIRMWARE_TEMPLATE)
 
     board = TARGETS[target]
     template = PLATFORMIO_TEMPLATES.get(target, PLATFORMIO_TEMPLATES["esp32"])

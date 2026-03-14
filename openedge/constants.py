@@ -25,7 +25,9 @@ DEFAULT_TARGET = "esp32"  # Default deployment target
 # === TFLite Micro Configuration ===
 TENSOR_ARENA_MULTIPLIER = 2.0  # Model size multiplier for tensor arena
 TENSOR_ARENA_SAFETY_MARGIN = 1.15  # Additional 15% safety margin
-MAX_OPS_RESOLVER = 10  # Maximum ops supported by MicroMutableOpResolver
+MAX_OPS_RESOLVER = (
+    25  # Maximum ops supported by MicroMutableOpResolver (YOLO needs 15-20)
+)
 
 # === Output Configuration ===
 DEFAULT_OUTPUT_DIR = Path("output")  # Default output directory

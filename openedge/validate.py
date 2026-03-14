@@ -86,7 +86,6 @@ def validate_model(model_path: Path, dataset_path: Path, verbose: bool = False) 
     return {
         "inference_success_rate": success_rate,
         "latency_ms": avg_latency,
-        "memory": 0,  # TODO: Implement memory tracking
         "successful_inferences": successful,
         "total_images": len(images),
     }

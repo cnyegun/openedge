@@ -42,7 +42,7 @@ def generate_c_arrays(tflite_path: Path, output_dir: Path, tensor_arena: int = N
 
     # Generate .cc file with model data as byte array
     cc_path = output_dir / "model_data.cc"
-    with cc_path.open("w") as f:
+    with cc_path.open("w", encoding="utf-8") as f:
         f.write(f'#include "model_data.h"\n')
         f.write(f"const unsigned char {MODEL_DATA_VAR}[] = {{\n")
         # Write in chunks of 16 bytes for readability
@@ -61,7 +61,7 @@ def generate_c_arrays(tflite_path: Path, output_dir: Path, tensor_arena: int = N
 extern const unsigned char {MODEL_DATA_VAR}[];
 #endif
 """
-    h_path.write_text(h_content)
+    h_path.write_text(h_content, encoding="utf-8")
 
     typer.echo(f"  Generated: {cc_path}")
     typer.echo(f"  Generated: {h_path}")
