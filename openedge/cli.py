@@ -69,9 +69,13 @@ def optimize(
     output: Path = typer.Option(DEFAULT_OUTPUT_DIR, help="Output directory"),
 ):
     """Optimize TFLite model for embedded devices."""
-    ctx = create_context(tflite_path=model, output_dir=output)
-    ctx = optimize_model(ctx)
-    typer.echo(f"Optimized: {ctx.optimized_path}")
+    try:
+        ctx = create_context(tflite_path=model, output_dir=output)
+        ctx = optimize_model(ctx)
+        typer.echo(f"Optimized: {ctx.optimized_path}")
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -80,9 +84,13 @@ def generate(
     output: Path = typer.Option(DEFAULT_OUTPUT_DIR, help="Output directory"),
 ):
     """Generate C code from TFLite model."""
-    ctx = create_context(optimized_path=model, output_dir=output)
-    result = generate_code(ctx)
-    typer.echo(f"Generated: {result['cc']}")
+    try:
+        ctx = create_context(optimized_path=model, output_dir=output)
+        result = generate_code(ctx)
+        typer.echo(f"Generated: {result['cc']}")
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -92,8 +100,12 @@ def build(
     output: Path = typer.Option(DEFAULT_OUTPUT_DIR, help="Output directory"),
 ):
     """Build firmware for target platform."""
-    result = build_firmware(model, target, output)
-    typer.echo(f"Built: {result}")
+    try:
+        result = build_firmware(model, target, output)
+        typer.echo(f"Built: {result}")
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -103,9 +115,13 @@ def validate(
     verbose: bool = typer.Option(False, help="Show detailed output"),
 ):
     """Validate model accuracy on test dataset."""
-    metrics = validate_model(model, dataset, verbose)
-    typer.echo(f"Success rate: {metrics['inference_success_rate']:.1f}%")
-    typer.echo(f"Avg latency: {metrics['latency_ms']:.1f}ms")
+    try:
+        metrics = validate_model(model, dataset, verbose)
+        typer.echo(f"Success rate: {metrics['inference_success_rate']:.1f}%")
+        typer.echo(f"Avg latency: {metrics['latency_ms']:.1f}ms")
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
