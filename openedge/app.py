@@ -124,95 +124,44 @@ def convert_model(ctx: Context) -> Context:
 
 
 def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
-    """Quantize TFLite model to INT8 using onnx2tf for compatibility."""
+    """Quantize TFLite model to INT8 using ultralytics internal calibration."""
     check_file(ctx.tflite_path, "TFLite model")
 
-    # Get calibration images
+    # Validate calibration images exist (ultralytics will use them internally)
     images = list(calibration_dir.glob("*.jpg")) + list(calibration_dir.glob("*.png"))
     if not images:
-        raise ValueError(f"No images found in {calibration_dir}")
+        raise ValueError(f"No calibration images found in {calibration_dir}")
+    typer.echo(f"  Found {len(images)} calibration images")
 
-    # Prepare calibration data (BHWC format: batch, height, width, channels)
-    calibration_arrays = []
-    for img_path in images[:20]:  # Use up to 20 images
-        try:
-            img = Image.open(img_path).convert("RGB").resize((640, 640))
-            arr = np.array(img).astype(np.float32)  # HWC format
-            calibration_arrays.append(arr)
-        except Exception as e:
-            print(f"Warning: Could not load {img_path}: {e}")
-            continue
-
-    if not calibration_arrays:
-        raise ValueError("No valid calibration images could be loaded")
-
-    # Stack into BHWC format
-    calibration_data = np.stack(calibration_arrays, axis=0)
-    typer.echo(f"  Loaded {len(calibration_arrays)} calibration images")
-
-    # Save calibration data for onnx2tf
-    tmp_dir = ctx.output_dir / "tmp_calib"
-    tmp_dir.mkdir(exist_ok=True)
-    calib_file = tmp_dir / "calibration.npy"
-    np.save(str(calib_file), calibration_data)
-
-    # onnx2tf calibration format: [[input_name, file_path, min_values, max_values]]
-    # For images normalized 0-255
-    np_data = [["images", calib_file, [[[[0, 0, 0]]]], [[[[255, 255, 255]]]]]]
-
-    # Convert TFLite to ONNX first (using onnx2tf reverse conversion)
-    # Actually, onnx2tf expects ONNX as input, so we need to convert TFLite to ONNX
-    # But TFLite -> ONNX is complex. Instead, let's re-export from the original YOLO
-    # through ONNX with INT8 quantization
-
-    typer.echo("  Converting to INT8 via onnx2tf...")
-
-    # Since we have the original YLO model path in context, let's use ultralytics directly
-    # to export INT8 TFLite
     if YOLO is None:
         raise RuntimeError("Install ultralytics: pip install ultralytics")
 
-    # Check if we have original model
-    if ctx.model_path and ctx.model_path.exists():
-        typer.echo(f"  Re-exporting {ctx.model_path.name} with INT8 quantization...")
-        model = YOLO(str(ctx.model_path))
+    if not ctx.model_path or not ctx.model_path.exists():
+        raise RuntimeError("Original model path required for INT8 quantization")
 
-        # Export with INT8
-        result = model.export(
-            format="tflite",
-            imgsz=640,
-            int8=True,
-            data=None,  # Use calibration images from our directory
-            verbose=False,
+    typer.echo(f"  Re-exporting {ctx.model_path.name} with INT8 quantization...")
+    model = YOLO(str(ctx.model_path))
+
+    # Export with INT8 (ultralytics handles calibration internally)
+    result = model.export(format="tflite", imgsz=640, int8=True, verbose=False)
+    result_path = Path(result)
+
+    # Find the INT8 model in the saved_model directory
+    saved_model_dir = result_path.parent
+    int8_files = glob.glob(str(saved_model_dir / "*int8*.tflite"))
+    output_path = ctx.output_dir / "model_int8.tflite"
+
+    if int8_files:
+        shutil.copy(int8_files[0], output_path)
+        typer.echo(
+            f"  Quantized: {output_path} ({os.path.getsize(output_path) / 1024 / 1024:.1f}MB)"
         )
-
-        # Ensure result is a Path
-        result_path = Path(result)
-
-        # Find the INT8 model in the saved_model directory
-        saved_model_dir = result_path.parent
-        int8_files = glob.glob(str(saved_model_dir / "*int8*.tflite"))
-        if int8_files:
-            output_path = ctx.output_dir / "model_int8.tflite"
-            shutil.copy(int8_files[0], output_path)
-            typer.echo(
-                f"  Quantized: {output_path} ({os.path.getsize(output_path) / 1024 / 1024:.1f}MB)"
-            )
-        else:
-            # Fallback: use the exported file
-            output_path = ctx.output_dir / "model_int8.tflite"
-            shutil.copy(result_path, output_path)
-            typer.echo(f"  Quantized (fallback): {output_path}")
     else:
-        raise RuntimeError("Original model path not available for INT8 re-export")
+        shutil.copy(result_path, output_path)
+        typer.echo(f"  Quantized: {output_path}")
 
     ctx.quantized_path = output_path
     ctx.save()
-
-    # Cleanup
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-
     return ctx
 
 
@@ -416,18 +365,6 @@ def convert(
     ctx = create_context(model_path=model, target=target, output_dir=output)
     ctx = convert_model(ctx)
     typer.echo(f"Converted: {ctx.tflite_path}")
-
-
-@app.command()
-def quantize(
-    model: Path = typer.Argument(..., help="Input TFLite model"),
-    calibration: Path = typer.Argument(..., help="Calibration images folder"),
-    output: Path = typer.Option(Path("output"), help="Output directory"),
-):
-    """Quantize model to INT8."""
-    ctx = create_context(tflite_path=model, output_dir=output)
-    ctx = quantize_model(ctx, calibration)
-    typer.echo(f"Quantized: {ctx.quantized_path}")
 
 
 @app.command()

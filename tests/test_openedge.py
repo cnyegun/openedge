@@ -117,11 +117,15 @@ class TestQuantize:
     def test_no_images_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
+            model_file = tmp_path / "test.pt"
+            model_file.write_bytes(b"fake model")
             tflite_file = tmp_path / "test.tflite"
             tflite_file.write_bytes(b"fake tflite")
             calib_dir = tmp_path / "calib"
             calib_dir.mkdir()
-            ctx = create_context(tflite_path=tflite_file, output_dir=tmp_path)
+            ctx = create_context(
+                model_path=model_file, tflite_path=tflite_file, output_dir=tmp_path
+            )
             with pytest.raises(ValueError):
                 quantize_model(ctx, calib_dir)
 
