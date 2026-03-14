@@ -37,7 +37,7 @@ CONTEXT_FILE = "context.json"  # Pipeline state file name
 TARGETS = {
     "esp32": "esp32-s3-devkitc-1",
     "stm32": "stm32f407vg",
-    "arduino": "arduino nano 33",
+    "arduino": "Arduino Nano 33 BLE",
 }
 
 # === Model Formats ===
