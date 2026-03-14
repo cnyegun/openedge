@@ -156,7 +156,9 @@ class TestBuild:
     def test_build_esp32(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            result = build_firmware(Path("/tmp/test_model.tflite"), "esp32", tmp_path)
+            model_file = tmp_path / "model.tflite"
+            model_file.write_bytes(b"fake model data")
+            result = build_firmware(model_file, "esp32", tmp_path)
             result_path = Path(result)
             assert result_path.exists()
             assert (tmp_path / "model_data.cc").exists()
@@ -180,7 +182,10 @@ class TestBuild:
 
     def test_build_stm32(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = build_firmware(Path("/tmp/test_model.tflite"), "stm32", Path(tmp))
+            tmp_path = Path(tmp)
+            model_file = tmp_path / "model.tflite"
+            model_file.write_bytes(b"fake model data")
+            result = build_firmware(model_file, "stm32", tmp_path)
             assert Path(result).exists()
 
 

@@ -8,10 +8,27 @@ import os
 import shutil
 import json
 import time
+import glob
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
+
 import numpy as np
+from PIL import Image
+
+# Optional dependencies - imported at top for clarity
+# These are required for specific operations:
+# - ultralytics: for YOLO model conversion
+# - tensorflow: for validation and TFLite operations
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
+
+try:
+    import tensorflow as tf
+except ImportError:
+    tf = None
 
 app = typer.Typer(help="OpenEdge - Deploy ML models to embedded devices")
 
@@ -94,9 +111,7 @@ def convert_model(ctx: Context) -> Context:
             f"Unsupported format: {ctx.model_path.suffix}. Use .pt or .pth"
         )
 
-    try:
-        from ultralytics import YOLO
-    except ImportError:
+    if YOLO is None:
         raise RuntimeError("Install ultralytics: pip install ultralytics")
 
     output_path = ctx.output_dir / "model.tflite"
@@ -116,10 +131,6 @@ def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
     images = list(calibration_dir.glob("*.jpg")) + list(calibration_dir.glob("*.png"))
     if not images:
         raise ValueError(f"No images found in {calibration_dir}")
-
-    from PIL import Image
-    import numpy as np
-    import shutil
 
     # Prepare calibration data (BHWC format: batch, height, width, channels)
     calibration_arrays = []
@@ -156,66 +167,53 @@ def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
 
     typer.echo("  Converting to INT8 via onnx2tf...")
 
-    # Since we have the original YOLO model path in context, let's use ultralytics directly
+    # Since we have the original YLO model path in context, let's use ultralytics directly
     # to export INT8 TFLite
-    try:
-        from ultralytics import YOLO
+    if YOLO is None:
+        raise RuntimeError("Install ultralytics: pip install ultralytics")
 
-        # Check if we have original model
-        if ctx.model_path and ctx.model_path.exists():
+    # Check if we have original model
+    if ctx.model_path and ctx.model_path.exists():
+        typer.echo(f"  Re-exporting {ctx.model_path.name} with INT8 quantization...")
+        model = YOLO(str(ctx.model_path))
+
+        # Export with INT8
+        result = model.export(
+            format="tflite",
+            imgsz=640,
+            int8=True,
+            data=None,  # Use calibration images from our directory
+            verbose=False,
+        )
+
+        # Ensure result is a Path
+        result_path = Path(result)
+
+        # Find the INT8 model in the saved_model directory
+        saved_model_dir = result_path.parent
+        int8_files = glob.glob(str(saved_model_dir / "*int8*.tflite"))
+        if int8_files:
+            output_path = ctx.output_dir / "model_int8.tflite"
+            shutil.copy(int8_files[0], output_path)
             typer.echo(
-                f"  Re-exporting {ctx.model_path.name} with INT8 quantization..."
+                f"  Quantized: {output_path} ({os.path.getsize(output_path) / 1024 / 1024:.1f}MB)"
             )
-            model = YOLO(str(ctx.model_path))
-
-            # Export with INT8
-            result = model.export(
-                format="tflite",
-                imgsz=640,
-                int8=True,
-                data=None,  # Use calibration images from our directory
-                verbose=False,
-            )
-
-            # Ensure result is a Path
-            result_path = Path(result)
-
-            # Find the INT8 model in the saved_model directory
-            import glob
-
-            saved_model_dir = result_path.parent
-            int8_files = glob.glob(str(saved_model_dir / "*int8*.tflite"))
-            if int8_files:
-                output_path = ctx.output_dir / "model_int8.tflite"
-                shutil.copy(int8_files[0], output_path)
-                typer.echo(
-                    f"  Quantized: {output_path} ({os.path.getsize(output_path) / 1024 / 1024:.1f}MB)"
-                )
-            else:
-                # Fallback: use the exported file
-                output_path = ctx.output_dir / "model_int8.tflite"
-                shutil.copy(result_path, output_path)
-                typer.echo(f"  Quantized (fallback): {output_path}")
         else:
-            raise RuntimeError("Original model path not available for INT8 re-export")
+            # Fallback: use the exported file
+            output_path = ctx.output_dir / "model_int8.tflite"
+            shutil.copy(result_path, output_path)
+            typer.echo(f"  Quantized (fallback): {output_path}")
+    else:
+        raise RuntimeError("Original model path not available for INT8 re-export")
 
-        ctx.quantized_path = output_path
-        ctx.save()
+    ctx.quantized_path = output_path
+    ctx.save()
 
-        # Cleanup
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir)
+    # Cleanup
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
 
-        return ctx
-
-    except Exception as e:
-        typer.echo(f"  Error during INT8 quantization: {e}")
-        typer.echo("  Falling back to FP32 copy")
-        output_path = ctx.output_dir / "model_int8.tflite"
-        shutil.copy(str(ctx.tflite_path), str(output_path))
-        ctx.quantized_path = output_path
-        ctx.save()
-        return ctx
+    return ctx
 
 
 def optimize_model(ctx: Context) -> Context:
@@ -313,8 +311,6 @@ def build_firmware(model_path: Path, target: str, output_dir: Path):
 
 def validate_model(model_path: Path, dataset_path: Path, verbose: bool = False):
     """Test model on dataset and return accuracy metrics."""
-    from PIL import Image
-
     check_file(model_path, "TFLite model")
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset not found: {dataset_path}")
@@ -323,9 +319,7 @@ def validate_model(model_path: Path, dataset_path: Path, verbose: bool = False):
     if not images:
         raise ValueError(f"No images found in {dataset_path}")
 
-    try:
-        import tensorflow as tf
-    except ImportError:
+    if tf is None:
         raise RuntimeError(
             "TensorFlow required for validation. Install with: pip install tensorflow"
         )
