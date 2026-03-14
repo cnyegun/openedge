@@ -198,11 +198,12 @@ class TestOutputCorrectness:
         except ImportError:
             pytest.skip("TensorFlow not available")
 
-        model_path = Path(
-            "/home/smooth/cless/artifacts/models/embedded/yolov8n_int8.tflite"
-        )
+        # Check for test model in order: local data dir, skip
+        model_path = Path(__file__).parent / "data" / "yolov8n_int8.tflite"
         if not model_path.exists():
-            pytest.skip("Test model not available")
+            pytest.skip(
+                "Test model not available. Place at tests/data/yolov8n_int8.tflite"
+            )
 
         interpreter = tf.lite.Interpreter(model_path=str(model_path))
         interpreter.allocate_tensors()
@@ -230,11 +231,12 @@ class TestOutputCorrectness:
         except ImportError:
             pytest.skip("TensorFlow not available")
 
-        model_path = Path(
-            "/home/smooth/cless/artifacts/models/embedded/yolov8n_int8.tflite"
-        )
+        # Check for test model in order: local data dir, skip
+        model_path = Path(__file__).parent / "data" / "yolov8n_int8.tflite"
         if not model_path.exists():
-            pytest.skip("Test model not available")
+            pytest.skip(
+                "Test model not available. Place at tests/data/yolov8n_int8.tflite"
+            )
 
         interpreter = tf.lite.Interpreter(model_path=str(model_path))
         interpreter.allocate_tensors()

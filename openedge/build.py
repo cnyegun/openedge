@@ -44,15 +44,36 @@ void loop() {{
 }}
 """
 
-# PlatformIO configuration template
-PLATFORMIO_TEMPLATE = """[env:{target}]
+# PlatformIO configuration templates per platform
+PLATFORMIO_TEMPLATES = {
+    "esp32": """[env:{target}]
 platform = espressif32
 board = {board}
 framework = arduino
 monitor_speed = {baud}
 build_flags = -DTF_LITE_MICRO
 lib_deps = tensorflow/TensorFlowLite_ESP32@^1.0.0
-"""
+""",
+    "stm32": """[env:{target}]
+platform = ststm32
+board = {board}
+framework = arduino
+monitor_speed = {baud}
+build_flags = -DTF_LITE_MICRO
+lib_deps = 
+    stm32duino/STM32duino LwIP@^2.1.2
+    stm32duino/STM32Ethernet@^1.3.0
+""",
+    "arduino": """[env:{target}]
+platform = arduino
+board = {board}
+framework = arduino
+monitor_speed = {baud}
+build_flags = -DTF_LITE_MICRO
+lib_deps = 
+    arduino-libraries/Ethernet@^2.0.0
+""",
+}
 
 
 def build_firmware(model_path: Path, target: str, output_dir: Path) -> str:
@@ -91,7 +112,8 @@ def build_firmware(model_path: Path, target: str, output_dir: Path) -> str:
     (firmware_dir / "main.cc").write_text(FIRMWARE_TEMPLATE)
 
     board = TARGETS[target]
-    platformio_content = PLATFORMIO_TEMPLATE.format(
+    template = PLATFORMIO_TEMPLATES.get(target, PLATFORMIO_TEMPLATES["esp32"])
+    platformio_content = template.format(
         target=target, board=board, baud=DEFAULT_BAUD_RATE
     )
     (output_dir / "platformio.ini").write_text(platformio_content)
