@@ -136,18 +136,34 @@ def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
             "TensorFlow required for quantization. Install with: pip install tensorflow"
         )
 
-    # Configure quantization
-    converter = tf.lite.TFLiteConverter.from_flat_file(str(ctx.tflite_path))
+    # Try using ai_edge_litert (LiteRT) for newer TensorFlow
+    try:
+        import ai_edge_litert as litert
+
+        model = litert.load(str(ctx.tflite_path))
+        quantizer = litert.quantize(model)
+        quantizer.set_quantization_strategy(
+            litert.QuantizationStrategy.INT8_DYNAMIC_RANGE
+        )
+        quantizer.set_representative_dataset(representative_data)
+        quantized_model = quantizer.quantize()
+        output_path = ctx.output_dir / "model_int8.tflite"
+        quantized_model.save(str(output_path))
+        ctx.quantized_path = output_path
+        ctx.save()
+        return ctx
+    except Exception as e:
+        print(f"LiteRT quantize failed: {e}, trying TensorFlow API...")
+
+    # Fallback to older TensorFlow API
+    converter = tf.lite.TFLiteConverter.from_saved_model(ctx.tflite_path)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     converter.representative_dataset = representative_data
     converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
     converter.inference_input_type = tf.uint8
     converter.inference_output_type = tf.uint8
-
-    # Convert and save
     output_path = ctx.output_dir / "model_int8.tflite"
     output_path.write_bytes(converter.convert())
-
     ctx.quantized_path = output_path
     ctx.save()
     return ctx
