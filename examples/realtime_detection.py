@@ -367,6 +367,4 @@ def run_camera_test(model_path: str = DEFAULT_MODEL, conf_threshold: float = 0.2
 if __name__ == "__main__":
     model_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL
     conf = float(sys.argv[2]) if len(sys.argv) > 2 else 0.25
-    run_camera_test(
-        model_path, conf_threshold=0.5
-    )  # Higher threshold for fewer false positives
+    run_camera_test(model_path, conf_threshold=conf)

@@ -79,8 +79,12 @@ def quantize_model(ctx: Context, calibration_dir: Path) -> Context:
         size_mb = output_path.stat().st_size / 1024 / 1024
         typer.echo(f"  Quantized: {output_path} ({size_mb:.1f}MB)")
     else:
+        # INT8 file not found - this shouldn't happen with int8=True
+        # But if it does, copy the fallback and warn user
         shutil.copy(result_path, output_path)
-        typer.echo(f"  Quantized: {output_path}")
+        size_mb = output_path.stat().st_size / 1024 / 1024
+        typer.echo(f"  WARNING: INT8 model not found, using standard TFLite")
+        typer.echo(f"  Output: {output_path} ({size_mb:.1f}MB)")
 
     ctx.quantized_path = output_path
     ctx.save()

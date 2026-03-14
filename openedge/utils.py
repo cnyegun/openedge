@@ -34,8 +34,16 @@ class Context:
     def load(cls, path: Path) -> "Context":
         """Load context from JSON file."""
         data = json.loads(path.read_text())
+        # Convert path fields back to Path objects
+        path_fields = {
+            "model_path",
+            "tflite_path",
+            "quantized_path",
+            "optimized_path",
+            "output_dir",
+        }
         return cls(
-            **{k: Path(v) if v and k.endswith("_path") else v for k, v in data.items()}
+            **{k: Path(v) if v and k in path_fields else v for k, v in data.items()}
         )
 
 

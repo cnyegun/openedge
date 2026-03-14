@@ -33,7 +33,7 @@ openedge generate output/model_optimized.tflite
 openedge build output/model_data.cc --target esp32
 
 # Validate on test images (requires tensorflow)
-openedge validate output/model_optimized.tflite --dataset test_images/
+openedge validate output/model_optimized.tflite test_images/
 ```
 
 ## Commands
@@ -52,7 +52,7 @@ openedge validate output/model_optimized.tflite --dataset test_images/
 
 - **ESP32** - esp32-s3-devkitc-1
 - **STM32** - stm32f407vg
-- **Arduino** - Arduino Nano 33 (ESP32-S3 based)
+- **Arduino** - Arduino Nano 33 BLE (nRF52840 based)
 
 ## Example Output
 
@@ -88,4 +88,4 @@ Apache 2.0
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Contributions welcome! Please open an issue or PR on GitHub.
