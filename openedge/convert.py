@@ -41,10 +41,11 @@ def convert_model(ctx: Context) -> Context:
     typer.echo(f"  Converting {ctx.model_path.name} to TFLite...")
 
     output_path = ctx.output_dir / "model.tflite"
-    result = YOLO(str(ctx.model_path)).export(
+    result_path = YOLO(str(ctx.model_path)).export(
         format="tflite", imgsz=IMG_SIZE, verbose=False
     )
-    shutil.copy(result, output_path)
+    # result_path is str, convert to Path for clarity
+    shutil.copy(Path(result_path), output_path)
 
     size_mb = output_path.stat().st_size / 1024 / 1024
     typer.echo(f"  Converted: {output_path} ({size_mb:.1f}MB)")

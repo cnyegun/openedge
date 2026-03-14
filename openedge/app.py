@@ -4,7 +4,7 @@ OpenEdge - Embedded ML deployment pipeline
 Backward compatibility - imports from new modular structure.
 """
 
-__version__ = "0.1.0"
+from openedge import __version__
 
 # Re-export main CLI for backward compatibility
 from openedge.cli import app
