@@ -27,21 +27,25 @@ def deploy(
     ),
 ):
     """Full pipeline: convert → quantize → optimize → generate → build."""
-    typer.echo(f"Deploying {model.name} to {target}...")
+    try:
+        typer.echo(f"Deploying {model.name} to {target}...")
 
-    ctx = create_context(model_path=model, target=target, output_dir=output)
+        ctx = create_context(model_path=model, target=target, output_dir=output)
 
-    # Run pipeline
-    ctx = convert_model(ctx)
+        # Run pipeline
+        ctx = convert_model(ctx)
 
-    if calibration:
-        ctx = quantize_model(ctx, calibration)
+        if calibration:
+            ctx = quantize_model(ctx, calibration)
 
-    ctx = optimize_model(ctx)
-    generate_code(ctx)
-    build_firmware(ctx.optimized_path, target, output)
+        ctx = optimize_model(ctx)
+        generate_code(ctx)
+        build_firmware(ctx.optimized_path, target, output)
 
-    typer.echo(f"\nDone! Output in {output}/")
+        typer.echo(f"\nDone! Output in {output}/")
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
