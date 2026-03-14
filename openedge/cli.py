@@ -50,9 +50,13 @@ def convert(
     output: Path = typer.Option(DEFAULT_OUTPUT_DIR, help="Output directory"),
 ):
     """Convert YOLO model to TFLite format."""
-    ctx = create_context(model_path=model, output_dir=output)
-    ctx = convert_model(ctx)
-    typer.echo(f"Converted: {ctx.tflite_path}")
+    try:
+        ctx = create_context(model_path=model, output_dir=output)
+        ctx = convert_model(ctx)
+        typer.echo(f"Converted: {ctx.tflite_path}")
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()

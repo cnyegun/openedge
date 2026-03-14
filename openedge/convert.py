@@ -27,7 +27,8 @@ def convert_model(ctx: Context) -> Context:
     if not ctx.model_path:
         raise ValueError("model_path required in context")
 
-    ctx.output_dir.mkdir(parents=True, exist_ok=True)
+    # Validate inputs first
+    check_file(ctx.model_path, "Model file")
 
     if ctx.model_path.suffix not in SUPPORTED_PT_EXTS:
         raise ValueError(
@@ -36,16 +37,29 @@ def convert_model(ctx: Context) -> Context:
         )
 
     if YOLO is None:
-        raise RuntimeError("Install ultralytics: pip install ultralytics")
+        raise RuntimeError(
+            "YOLO conversion requires ultralytics. "
+            "Install with: pip install ultralytics"
+        )
+
+    ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
     typer.echo(f"  Converting {ctx.model_path.name} to TFLite...")
 
-    output_path = ctx.output_dir / "model.tflite"
-    result_path = YOLO(str(ctx.model_path)).export(
-        format="tflite", imgsz=IMG_SIZE, verbose=False
-    )
-    # result_path is str, convert to Path for clarity
-    shutil.copy(Path(result_path), output_path)
+    try:
+        output_path = ctx.output_dir / "model.tflite"
+        result_path = YOLO(str(ctx.model_path)).export(
+            format="tflite", imgsz=IMG_SIZE, verbose=False
+        )
+        # result_path is str, convert to Path for clarity
+        shutil.copy(Path(result_path), output_path)
+    except ModuleNotFoundError as e:
+        if "tensorflow" in str(e).lower():
+            raise RuntimeError(
+                "TFLite export requires TensorFlow. "
+                "Install with: pip install tensorflow"
+            ) from e
+        raise
 
     size_mb = output_path.stat().st_size / 1024 / 1024
     typer.echo(f"  Converted: {output_path} ({size_mb:.1f}MB)")
